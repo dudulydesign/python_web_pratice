@@ -1,0 +1,222 @@
+最近要利用Python來monitor一些東西, 需要做個telnet daemon
+
+特地寫一下如何用 python 做一個 socket server
+
+這個我當初到是真的花了不少時間找尋資料, 發現有兩種方法, 一種是比較傳統的 socket
+
+然而 python 也有做一個 module - SocketServer, 可以簡化不少自己用 socket 做 server 的麻煩
+
+不過 client 端當然還是要用 socket 自己做
+
+官方文件 Socket: http://docs.python.org/2/howto/sockets.html
+
+網路上有很多教學, 這裡到是有一個不錯的英文教學: http://www.binarytides.com/python-socket-programming-tutorial/
+
+先從server端開始 (socket 的功用不是只有當 server, 只是這邊用 server - client 角度當範例)
+import socket
+
+host = ''
+port = 12345
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+sock.bind((host, port))
+
+sock.listen(5)
+ 
+第一步, 要先import socket, 然後要先建立socket, 用socket.socket去create
+
+create有些基本設定, 首先是有socket.AF_INET跟socket.AF_UNIX兩種
+
+AF_INET: 跟外面網路, 也就是IPv4, TCP, UDP要用這種 (AF_INET6 for IPv6)
+
+AF_UNIX: 本地機器自己內部的溝通, 不對外
+
+至於socket.SOCK_STREAM與socket.SOCK_DGRAM
+
+SOCK_STREAM: 會確保資料正確的流到對方, 像是資料串流的用法, 此法是用TCP
+
+SOCK_DGRAM: 無確保, 像是廣播訊息的用法, 此法是用UDP
+
+第二步要讓這個socket要綁到某個位址(ip/port), 讓要求可以用此位址傳送訊息進來
+sock.bind((host, port))
+
+第三步設定最多可以讓幾個連線數
+sock.listen(5) # 最多5個
+
+最後就是要啟動server準備讓client傳送訊息
+sock.accept()
+
+注意, 使用accept()的時候, server會處在wait狀態, 等到有client連線的時候
+
+他會將整個連線跟client資訊回傳出來, 所以最好改成
+(clientsocket, address) = serversocket.accept()
+
+clientsocket就是存放這次的連線, 之後可以透過clientsocket來跟client做其他溝通
+
+address就會有連過來IP/PORT相關資訊
+
+那如果今天server只聽一次accept(), 做完就會結束了, 可是要做成Server, 要一直不停的聆聽client端傳過來的東西
+
+所以簡單一點可以把accept做在while loop裡面
+while True:
+    (clientsocket, address) = serversocket.accept()
+
+那server端跟client端彼此溝通是透過socket.recv & socket.send來傳送資料
+while True:
+    clientsocket.recv(1024) #接收1024字元
+    clientsocket.send(data) #傳送data出去
+
+那要是怕等待時間過久浪費connection, 可以設置timeout
+while True:
+    sock.settimeout(10) # timeout 10s
+
+簡單的完整例子
+import socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+sock.bind(('', 54321))
+sock.listen(5)
+sock.settimeout(10)
+
+
+#while True:
+    (csock, adr) = sock.accept()
+    print "Client Info: ", csock, adr
+
+那從client端來看, 一樣是要做socket.socket create, 但是他之後不用綁住位置, 他要的是給他位置去連線
+sock.connect((HOST, PORT))
+
+只要連上成功, 就可以開始跟server傳送訊息了, 下面給一個根據上述所寫出來的簡易流程
+
+Server
+import socket, sys
+
+try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+except socket.error, msg:
+    sys.stderr.write("[ERROR] %s\n" % msg[1])
+    sys.exit(1)
+
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) #reuse tcp
+sock.bind(('', 54321))
+sock.listen(5)
+sock.settimeout(10)
+
+
+while True:
+    (csock, adr) = sock.accept()
+    print "Client Info: ", csock, adr
+    msg = csock.recv(1024)
+    if not msg:
+        pass
+    else:
+        print "Client send: " + msg
+        csock.send("Hello I'm Server.\r\n")
+    csock.close()
+
+server端我稍微加了一點的try&except做偵測, 後面accept()之後, 做的事情很簡單, 但是要注意, 收到的客戶端連線叫做csock, 所以如果你要收或者是傳對方的訊息記得要用csock接收, 我看過有bug寫出來還是用sock去做sock.recv跟sock.send之類的, 要小心
+
+Client
+import socket, sys
+
+try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+except socket.error, msg:
+    sys.stderr.write("[ERROR] %s\n" % msg[1])
+    sys.exit(1)
+
+try:
+    sock.connect(('', 54321))
+except socket.error, msg:
+    sys.stderr.write("[ERROR] %s\n" % msg[1])
+    exit(1)
+
+sock.send("Hello I'm Client.\r\n")
+print sock.recv(1024)
+sock.close()
+
+客戶端就單純多了, connect之後, 就利用connect後好的sock做傳輸動作(send/recv)即可
+
+那這邊會看到一個很笨的事情, 當client做個一傳一回的動作之後, 就中斷了, 因為 server 端並沒有後續的處理, server 端因為 while loop 的關係, 所以又重新開始回到 accept() 接收狀態, 所以這時候就需要做threading的機制來幫你分別處理每個連上的 client 所需要的工作, 這留到後面仔細解說
+
+常見問題補充一下, 如果在實作的時候, 因為常常中斷又重新啟動server, 而發生 
+socket.error: [Errno 98] Address already in use
+
+這跟TCP的設計有關, 網路有一篇有詳細解釋
+
+解釋: http://stackoverflow.com/questions/337115/setting-time-wait-tcp
+
+那簡單一點說明就是 TCP connection建立的時候, 會有一組tuple - (source IP, source port, destination IP, destination port)
+
+這組就算你的server shutdown了, TCP connection都還是會在TIME_WAIT狀態, 因為怕還有其他live packets還沒傳送過來
+
+所以要嘛是改TIME_WAIT時間(不安全), 要嘛你設定之後可以這個TCP connection可以再度重複使用
+
+重複使用的方法就是, create socket完之後, 加上下列這行
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+這樣不管你強行中斷了多少次 server, 它都會再次接收原本的 TCP connection
+
+上述我簡單說明了如何使用 Socket 建立 server & client
+
+但是其實不是很實用, 因為 server 只能循序一個一個做對應的工作, 而且也不能同時處理多個clients
+
+這時候就需要靠線程(thread& threading)來幫忙解決問題了
+
+python thread: http://docs.python.org/2/library/thread.html
+
+其實python的thread算是比較低階的用法, 很單純, 但是功能性較少, 較複雜的要自己想辦法寫
+
+所以python還有一個叫high-level的threading, 去幫助需要更多複雜thread動作的人加速開發(lock相關之類的)
+
+先來簡單講講thread在上述socket server的修改
+
+首先import thread, 為了方便, 用 from thread import *
+
+那, 簡易的用法是, 可以直接呼叫start_new_thread(function, args), 就可以叫一個thread去做工作
+
+所以簡單修改一下上一個範例
+import socket, sys 
+from thread import *
+
+def threadWork(client):
+    while True:
+        msg = client.recv(1024)
+        if not msg:
+            pass
+        else:
+            print "Client send: " + msg 
+            client.send("You say: " + msg + "\r\n")
+    client.close()
+
+try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+except socket.error, msg:
+    sys.stderr.write("[ERROR] %s\n" % msg[1])
+    sys.exit(1)
+
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+sock.bind(('', 54321))
+sock.listen(5)
+
+while True:
+    (csock, adr) = sock.accept()
+    print "Client Info: ", csock, adr 
+    start_new_thread(threadWork, (csock,))
+
+sock.close()
+
+開頭新增了import thread, 不看threadwork function的話, 下面程式碼幾乎跟先前的如出一轍, 不過while loop裡面內容稍微不一樣了
+
+本來是直接接收client端傳過來的訊息, 變成直接呼叫thread(start_new_thread), 並且給了兩個參數
+
+首先第一個參數, 要給他一個function, 這個function就是你呼叫thread要做的事情, 第二個參數則是給要呼叫這個function所需要的arguments
+
+所以簡單啦, 就把原本要跟client做的溝通工作, 寫到thread要呼叫的functiion就好
+(這邊範例則是 threadwork )
+
+那因為我想要叫一個 thread 去幫我接收 client 端所傳過來的內容, 再傳回去, 然後無止盡的做, 就完成啦
+
+而 server 端還是可以不停的接收新進的client繼續工作, 既不會影響 client 又可以保持 server 流暢
